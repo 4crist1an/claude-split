@@ -30,3 +30,4 @@ proxy/shot-*.png
 *.rar
 .DS_Store
 Thumbs.db
+proxy/test-socks.json
