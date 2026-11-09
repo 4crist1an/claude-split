@@ -151,42 +151,40 @@ $pageVpn.Controls.Add($cmbAddType)
 $txtSub = New-Text $pageVpn 126 94 300
 $lblSubHint = New-Label $pageVpn 'выбери тип, вставь ссылку и нажми «Добавить»' 12 120 540 8 ([System.Drawing.Color]::FromArgb(140, 150, 170))
 
-[void](New-Label $pageVpn 'Сервер   (• — добавленные вручную)' 12 146 260 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
+[void](New-Label $pageVpn 'Сервер   (• — вручную, удаляются кнопкой «Удалить»)' 12 146 260 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
 
 $cmbNode = New-Object System.Windows.Forms.ComboBox
 $cmbNode.Location = New-Object System.Drawing.Point(12, 166)
-$cmbNode.Size = New-Object System.Drawing.Size(290, 24)
+$cmbNode.Size = New-Object System.Drawing.Size(230, 24)
 $cmbNode.DropDownStyle = 'DropDownList'
 $pageVpn.Controls.Add($cmbNode)
+
+$script:skipNodeSel = $false
+$script:lastNodeIdx = -1
+$script:nodeMap = New-Object System.Collections.ArrayList
+
+$cmbNode.Add_SelectedIndexChanged({
+    if ($script:skipNodeSel) { return }
+    $i = $cmbNode.SelectedIndex
+    if ($i -lt 0 -or $i -ge $script:nodeMap.Count -or -not $script:nodeMap[$i]) {
+        $script:skipNodeSel = $true
+        if ($script:lastNodeIdx -ge 0 -and $script:lastNodeIdx -lt $cmbNode.Items.Count) { $cmbNode.SelectedIndex = $script:lastNodeIdx }
+        $script:skipNodeSel = $false
+        return
+    }
+    $script:lastNodeIdx = $i
+})
 
 $nodeMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $miDelNode = New-Object System.Windows.Forms.ToolStripMenuItem('Удалить сервер (вручную)')
 [void]$nodeMenu.Items.Add($miDelNode)
 $cmbNode.ContextMenuStrip = $nodeMenu
-$miDelNode.Add_Click({
-    $i = $cmbNode.SelectedIndex
-    if ($i -lt 0 -or $i -ge $script:nodes.Count) { return }
-    $n = $script:nodes[$i]
-    if ($n.sub -ne 'вручную') {
-        [void][System.Windows.Forms.MessageBox]::Show('Этот сервер из подписки — он удаляется вместе с подпиской (кнопка «Удалить» сверху).', 'Claude VPN', 'OK', 'Information')
-        return
-    }
-    $cfg = Get-Config
-    $cfg.manual = @($cfg.manual | Where-Object { -not ("$($_.host):$($_.port)" -eq "$($n.host):$($n.port)") })
-    if ("$($n.host):$($n.port)" -eq $cfg.selectedNode) {
-        Stop-Xray
-        $cfg | Add-Member -NotePropertyName selectedNode -NotePropertyValue '' -Force
-        $lblClaude.Text = 'Claude: туннель остановлен'
-    }
-    Save-Config $cfg
-    Write-Log ('manual node removed: ' + $n.name)
-    Refresh-Nodes
-    $lblInfo.Text = "Сервер удалён: $($n.name)"
-})
+$miDelNode.Add_Click({ Remove-SelectedNode })
 
-$btnConnect = New-Button $pageVpn 'Подключить' 306 164 128 28 $true
-$btnTestAll = New-Button $pageVpn 'Пинг' 438 164 130
-
+$btnConnect = New-Button $pageVpn 'Подключить' 246 164 118 28 $true
+$btnTestAll = New-Button $pageVpn 'Пинг' 368 164 92
+$btnDelNode = New-Button $pageVpn 'Удалить' 464 164 104
+$btnDelNode.Add_Click({ Remove-SelectedNode })
 $lblClaude = New-Label $pageVpn 'Claude: —' 12 200 560 10
 $lblYt = New-Label $pageVpn 'YouTube: —' 12 224 560 9
 $lblDc = New-Label $pageVpn 'Discord: —' 12 246 560 9
@@ -287,20 +285,81 @@ function Refresh-Subs {
 
 function Refresh-Nodes([switch]$Reload) {
     if ($Reload) { $script:nodes = @(Update-Subscriptions); $script:nodes = @(Get-AllNodes) } else { $script:nodes = @(Get-AllNodes) }
-    $cmbNode.Items.Clear()
-    foreach ($n in $script:nodes) {
-        $mark = if ($n.sub -eq 'вручную') { '• ' } else { '' }
-        [void]$cmbNode.Items.Add("$mark$($n.name)  [$($n.host)]")
+
+    # чистим битые ручные записи (пустой хост/порт)
+    $cfg0 = Get-Config
+    $bad = @($cfg0.manual | Where-Object { -not $_.host -or [int]$_.port -le 0 })
+    if ($bad.Count -gt 0) {
+        $cfg0.manual = @($cfg0.manual | Where-Object { $_.host -and [int]$_.port -gt 0 })
+        Save-Config $cfg0
+        $script:nodes = @(Get-AllNodes)
     }
-    $cfg = Get-Config
-    if ($cfg.selectedNode) {
-        $i = 0
-        foreach ($n in $script:nodes) {
-            if ("$($n.host):$($n.port)" -eq $cfg.selectedNode) { $cmbNode.SelectedIndex = $i; break }
-            $i++
+
+    $script:skipNodeSel = $true
+    $cmbNode.Items.Clear()
+    $script:nodeMap = New-Object System.Collections.ArrayList
+
+    # группы: ручные по типу, затем подписки
+    $groups = @()
+    foreach ($kind in @('vless', 'socks', 'http')) {
+        $arr = @($script:nodes | Where-Object { $_.sub -eq 'вручную' -and $_.kind -eq $kind })
+        if ($arr.Count -gt 0) {
+            $title = switch ($kind) { 'vless' { 'VLESS' } 'socks' { 'SOCKS5' } 'http' { 'HTTP' } }
+            $groups += , @($title, $arr)
         }
     }
-    if ($cmbNode.SelectedIndex -lt 0 -and $cmbNode.Items.Count -gt 0) { $cmbNode.SelectedIndex = 0 }
+    foreach ($g in @($script:nodes | Where-Object { $_.sub -ne 'вручную' } | Group-Object sub)) {
+        $groups += , @($g.Name, @($g.Group))
+    }
+
+    foreach ($grp in $groups) {
+        [void]$cmbNode.Items.Add("── $($grp[0]) ──")
+        [void]$script:nodeMap.Add($null)
+        foreach ($n in $grp[1]) {
+            $mark = if ($n.sub -eq 'вручную') { '• ' } else { '   ' }
+            [void]$cmbNode.Items.Add("$mark$($n.name)  [$($n.host)]")
+            [void]$script:nodeMap.Add($n)
+        }
+    }
+
+    $cfg = Get-Config
+    $idxSel = -1
+    for ($i = 0; $i -lt $script:nodeMap.Count; $i++) {
+        $n = $script:nodeMap[$i]
+        if ($n -and $cfg.selectedNode -and ("$($n.host):$($n.port)" -eq $cfg.selectedNode)) { $idxSel = $i; break }
+    }
+    if ($idxSel -lt 0) {
+        for ($i = 0; $i -lt $script:nodeMap.Count; $i++) { if ($script:nodeMap[$i]) { $idxSel = $i; break } }
+    }
+    if ($idxSel -ge 0) { $cmbNode.SelectedIndex = $idxSel }
+    $script:lastNodeIdx = $idxSel
+    $script:skipNodeSel = $false
+}
+
+function Get-SelectedNode {
+    $i = $cmbNode.SelectedIndex
+    if ($i -lt 0 -or $i -ge $script:nodeMap.Count) { return $null }
+    return $script:nodeMap[$i]
+}
+
+function Remove-SelectedNode {
+    $n = Get-SelectedNode
+    if (-not $n) { return }
+    if ($n.sub -ne 'вручную') {
+        [void][System.Windows.Forms.MessageBox]::Show('Этот сервер принадлежит подписке — удалить его отдельно нельзя. Удаляется вместе с подпиской (кнопка «Удалить» сверху).', 'Claude VPN', 'OK', 'Information')
+        return
+    }
+    $cfg = Get-Config
+    $cfg.manual = @($cfg.manual | Where-Object { -not ("$($_.host):$($_.port)" -eq "$($n.host):$($n.port)") })
+    if ("$($n.host):$($n.port)" -eq $cfg.selectedNode) {
+        Stop-Xray
+        $cfg | Add-Member -NotePropertyName selectedNode -NotePropertyValue '' -Force
+        $lblClaude.Text = 'Claude: туннель остановлен'
+    }
+    Save-Config $cfg
+    Write-Log ('manual node removed: ' + $n.name)
+    Refresh-Nodes
+    $lblInfo.Text = "Сервер удалён: $($n.name)"
 }
 
 function Update-PresetList {
@@ -522,9 +581,8 @@ $cmbSub.Add_SelectedIndexChanged({
 })
 
 $btnConnect.Add_Click({
-    $i = $cmbNode.SelectedIndex
-    if ($i -lt 0) { return }
-    $node = $script:nodes[$i]
+    $node = Get-SelectedNode
+    if (-not $node) { return }
     $lblInfo.Text = "Подключаюсь к $($node.name)…"
     $form.Refresh()
     Write-Log ('user: connect ' + $node.name)
@@ -548,19 +606,19 @@ $btnTestAll.Add_Click({
         $ms = Test-TcpPing $n.host $n.port 2000
         $n | Add-Member -NotePropertyName pingMs -NotePropertyValue $ms -Force
     }
-    $cfgNow = Get-Config
-    $cmbNode.Items.Clear()
-    foreach ($n in $script:nodes) {
+
+    # обновляем подписи прямо в сгруппированном списке
+    $script:skipNodeSel = $true
+    for ($k = 0; $k -lt $script:nodeMap.Count; $k++) {
+        $n = $script:nodeMap[$k]
+        if (-not $n) { continue }
         $ms = if ($n.pingMs -ge 0) { "$($n.pingMs) мс" } else { 'н/д' }
-        [void]$cmbNode.Items.Add("$($n.name)  [$($n.host)]  $ms")
+        $mark = if ($n.sub -eq 'вручную') { '• ' } else { '   ' }
+        $cmbNode.Items[$k] = "$mark$($n.name)  [$($n.host)]  $ms"
     }
-    $idx = 0
-    $j = 0
-    foreach ($n in $script:nodes) {
-        if ("$($n.host):$($n.port)" -eq $cfgNow.selectedNode) { $idx = $j; break }
-        $j++
-    }
-    if ($cmbNode.Items.Count -gt 0) { $cmbNode.SelectedIndex = $idx }
+    $script:skipNodeSel = $false
+    if ($script:lastNodeIdx -ge 0) { $cmbNode.SelectedIndex = $script:lastNodeIdx }
+
     $fastest = $script:nodes | Where-Object { $_.pingMs -ge 0 } | Sort-Object pingMs | Select-Object -First 1
     if ($fastest) { $lblInfo.Text = "Пинг готов. Быстрее всех: $($fastest.name) — $($fastest.pingMs) мс (сервер не менялся)" }
     else { $lblInfo.Text = 'Пинг: ни один сервер не ответил (сервер не менялся)' }
