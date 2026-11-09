@@ -1,0 +1,32 @@
+# runtime state (never commit)
+proxy/config.json
+proxy/nodes.json
+proxy/xray.json
+proxy/mode.txt
+proxy/update-result.json
+proxy/zapret-bench.json
+proxy/zapret-job.json
+proxy/zapret-preset.txt
+proxy/zapret-action.json
+proxy/*.log
+proxy/*.pid
+proxy/*.bak
+proxy/*.out
+proxy/*.err
+
+# downloaded at first run
+bin/*
+!bin/.gitkeep
+zapret/
+
+# local helpers / test scripts
+proxy/t[0-9]*.ps1
+proxy/restart-daemon*.ps1
+proxy/test-shutdown.ps1
+proxy/shot-*.png
+
+# misc
+*.zip
+*.rar
+.DS_Store
+Thumbs.db
