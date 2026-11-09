@@ -1,0 +1,50 @@
+{
+    "log":  {
+                "loglevel":  "warning"
+            },
+    "inbounds":  [
+                     {
+                         "port":  20808,
+                         "protocol":  "socks",
+                         "settings":  {
+                                          "auth":  "noauth",
+                                          "udp":  true
+                                      },
+                         "tag":  "socks",
+                         "listen":  "127.0.0.1"
+                     },
+                     {
+                         "port":  20809,
+                         "protocol":  "http",
+                         "settings":  {
+
+                                      },
+                         "tag":  "http",
+                         "listen":  "127.0.0.1"
+                     }
+                 ],
+    "outbounds":  [
+                      {
+                          "protocol":  "socks",
+                          "tag":  "proxy",
+                          "settings":  {
+                                           "servers":  [
+                                                           {
+                                                               "port":  6014,
+                                                               "users":  [
+                                                                             {
+                                                                                 "user":  "fkowqayt",
+                                                                                 "pass":  "qxr5cegwmy2"
+                                                                             }
+                                                                         ],
+                                                               "address":  "45.38.107.97"
+                                                           }
+                                                       ]
+                                       }
+                      },
+                      {
+                          "protocol":  "freedom",
+                          "tag":  "direct"
+                      }
+                  ]
+}

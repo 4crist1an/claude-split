@@ -108,7 +108,13 @@ function New-ManualNode([string]$type, [string]$text) {
         $node | Add-Member -NotePropertyName kind -NotePropertyValue 'vless' -Force
         return $node
     }
-    $u = [uri]$text
+    if ($text -notmatch '^[a-zA-Z0-9]+://') {
+        if ($type -eq 'socks') { throw 'нужен формат: socks5://логин:пароль@хост:порт' }
+        else { throw 'нужен формат: http://логин:пароль@хост:порт' }
+    }
+    try { $u = [uri]$text } catch { throw 'не удалось разобрать ссылку — проверьте формат' }
+    if (-not $u.Host) { throw 'в ссылке нет адреса сервера' }
+    if ($u.Port -le 0) { throw 'в ссылке нет порта' }
     $kind = if ($type -eq 'socks') { 'socks' } else { 'http' }
     $user = ''
     $pass = ''

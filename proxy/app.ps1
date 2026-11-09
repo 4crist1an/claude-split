@@ -129,7 +129,7 @@ function New-Text($parent, $x, $y, $w, $h = 24, $multi = $false) {
 $title = New-Label $pageVpn 'Claude VPN' 12 8 300 15 ([System.Drawing.Color]::FromArgb(90, 200, 250))
 $title.Font = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
 
-[void](New-Label $pageVpn 'Источник (подписка)' 12 42 200 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
+[void](New-Label $pageVpn 'Подписки' 12 42 200 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
 
 $cmbSub = New-Object System.Windows.Forms.ComboBox
 $cmbSub.Location = New-Object System.Drawing.Point(12, 62)
@@ -149,15 +149,40 @@ foreach ($it in @('Подписка','VLESS','SOCKS5','HTTP')) { [void]$cmbAddTy
 $cmbAddType.SelectedIndex = 0
 $pageVpn.Controls.Add($cmbAddType)
 $txtSub = New-Text $pageVpn 126 94 300
-$lblSubHint = New-Label $pageVpn 'вставь ссылку на подписку и нажми «Добавить»' 12 120 540 8 ([System.Drawing.Color]::FromArgb(140, 150, 170))
+$lblSubHint = New-Label $pageVpn 'выбери тип, вставь ссылку и нажми «Добавить»' 12 120 540 8 ([System.Drawing.Color]::FromArgb(140, 150, 170))
 
-[void](New-Label $pageVpn 'Сервер' 12 146 120 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
+[void](New-Label $pageVpn 'Сервер   (• — добавленные вручную)' 12 146 260 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
 
 $cmbNode = New-Object System.Windows.Forms.ComboBox
 $cmbNode.Location = New-Object System.Drawing.Point(12, 166)
 $cmbNode.Size = New-Object System.Drawing.Size(290, 24)
 $cmbNode.DropDownStyle = 'DropDownList'
 $pageVpn.Controls.Add($cmbNode)
+
+$nodeMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$miDelNode = New-Object System.Windows.Forms.ToolStripMenuItem('Удалить сервер (вручную)')
+[void]$nodeMenu.Items.Add($miDelNode)
+$cmbNode.ContextMenuStrip = $nodeMenu
+$miDelNode.Add_Click({
+    $i = $cmbNode.SelectedIndex
+    if ($i -lt 0 -or $i -ge $script:nodes.Count) { return }
+    $n = $script:nodes[$i]
+    if ($n.sub -ne 'вручную') {
+        [void][System.Windows.Forms.MessageBox]::Show('Этот сервер из подписки — он удаляется вместе с подпиской (кнопка «Удалить» сверху).', 'Claude VPN', 'OK', 'Information')
+        return
+    }
+    $cfg = Get-Config
+    $cfg.manual = @($cfg.manual | Where-Object { -not ("$($_.host):$($_.port)" -eq "$($n.host):$($n.port)") })
+    if ("$($n.host):$($n.port)" -eq $cfg.selectedNode) {
+        Stop-Xray
+        $cfg | Add-Member -NotePropertyName selectedNode -NotePropertyValue '' -Force
+        $lblClaude.Text = 'Claude: туннель остановлен'
+    }
+    Save-Config $cfg
+    Write-Log ('manual node removed: ' + $n.name)
+    Refresh-Nodes
+    $lblInfo.Text = "Сервер удалён: $($n.name)"
+})
 
 $btnConnect = New-Button $pageVpn 'Подключить' 306 164 128 28 $true
 $btnTestAll = New-Button $pageVpn 'Пинг' 438 164 130
@@ -263,7 +288,10 @@ function Refresh-Subs {
 function Refresh-Nodes([switch]$Reload) {
     if ($Reload) { $script:nodes = @(Update-Subscriptions); $script:nodes = @(Get-AllNodes) } else { $script:nodes = @(Get-AllNodes) }
     $cmbNode.Items.Clear()
-    foreach ($n in $script:nodes) { [void]$cmbNode.Items.Add("$($n.name)  [$($n.host)]") }
+    foreach ($n in $script:nodes) {
+        $mark = if ($n.sub -eq 'вручную') { '• ' } else { '' }
+        [void]$cmbNode.Items.Add("$mark$($n.name)  [$($n.host)]")
+    }
     $cfg = Get-Config
     if ($cfg.selectedNode) {
         $i = 0
@@ -449,6 +477,8 @@ $btnAdd.Add_Click({
     }
     catch {
         $lblInfo.Text = 'Ошибка разбора: ' + $_.Exception.Message
+        $msg = 'Не удалось добавить:' + [Environment]::NewLine + [Environment]::NewLine + $_.Exception.Message
+        [void][System.Windows.Forms.MessageBox]::Show($msg, 'Claude VPN', 'OK', 'Warning')
     }
 })
 
