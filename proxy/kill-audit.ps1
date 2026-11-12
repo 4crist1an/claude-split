@@ -45,7 +45,7 @@ else {
     $conns = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $pids -contains $_.OwningProcess -and $_.State -eq 'Established' })
     $direct = @($conns | Where-Object { $_.RemoteAddress -notin @('127.0.0.1', '::1', '0.0.0.0', '::') })
     if ($direct.Count -gt 0) {
-        Add-Line 'FAIL' ("Есть прямые соединения Claude вне прокси: " + (($direct | Select-Object -ExpandProperty RemoteAddress -Unique) -join ', '))
+        Add-Line 'FAIL' ("Есть прямые соединения Claude вне прокси: " + (($direct | Select-Object -ExpandProperty RemoteAddress -Unique) -join ', ') + ' — если Claude был запущен до включения защиты, закройте и откройте его: правила не рвут уже установленные соединения')
         $script:fail++
     }
     else {
