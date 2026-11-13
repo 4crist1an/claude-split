@@ -332,3 +332,17 @@ function Start-BackgroundProcess([string]$Exe, [string]$Arguments) {
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     [System.Diagnostics.Process]::Start($psi) | Out-Null
 }
+# Проверяет, покрывают ли текущие правила все актуальные exe Claude.
+# Нужно после обновления/отката Claude: путь к файлу меняется вместе с версией.
+function Sync-KillSwitch {
+    $exes = @(Get-ClaudeExePaths)
+    if ($exes.Count -eq 0) { return $false }
+    $covered = @(Get-ClaudeBlockRules | ForEach-Object {
+        $a = $_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+        if ($a) { [string]$a.Program }
+    })
+    foreach ($e in $exes) {
+        if ($covered -notcontains $e) { return $false }
+    }
+    return $true
+}

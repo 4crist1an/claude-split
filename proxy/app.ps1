@@ -46,7 +46,13 @@ public class ExistingWindow {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 }
 "@
-    $h = [ExistingWindow]::FindWindow($null, 'Claude VPN')
+    # окно второго экземпляра может ещё не существовать — подождём немного
+    $h = [IntPtr]::Zero
+    for ($i = 0; $i -lt 20; $i++) {
+        $h = [ExistingWindow]::FindWindow($null, 'Claude VPN')
+        if ($h -ne [IntPtr]::Zero) { break }
+        Start-Sleep -Milliseconds 250
+    }
     if ($h -ne [IntPtr]::Zero) {
         [ExistingWindow]::ShowWindow($h, 9) | Out-Null
         [ExistingWindow]::SetForegroundWindow($h) | Out-Null
@@ -775,6 +781,23 @@ function Update-KillState {
     }
 }
 
+# Автовосстановление правил после обновления/отката Claude:
+# путь к claude.exe меняется вместе с версией, поэтому правила пересоздаются.
+function Ensure-KillSwitchSync {
+    $cfgK = Get-Config
+    if (-not $cfgK.killSwitch) { return }
+    if (Sync-KillSwitch) { return }
+    Write-Log 'kill-switch: версия Claude изменилась — пересоздаю правила'
+    $path = Join-Path $appDir 'install-killswitch.ps1'
+    if (-not (Test-Path $path)) { return }
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $path) -Wait -ErrorAction Stop
+        Write-Log 'kill-switch: правила обновлены автоматически'
+    }
+    catch { Write-Log ('kill-switch: авто-обновление не удалось — ' + $_.Exception.Message) }
+    Update-KillState
+}
+
 $btnKill.Add_Click({
     $rules = Get-KillRules
     $on = @($rules | Where-Object { "$($_.Action)" -eq 'Block' }).Count -gt 0
@@ -803,6 +826,9 @@ $btnKill.Add_Click({
         return
     }
     Start-Sleep -Milliseconds 600
+    $cfgK = Get-Config
+    $cfgK | Add-Member -NotePropertyName killSwitch -NotePropertyValue ([bool](-not $on)) -Force
+    Save-Config $cfgK
     Update-KillState
 })
 
@@ -854,6 +880,11 @@ function Start-ZapretAction([string]$act) {
 }
 
 # автообновление статуса zapret (чтобы клик всегда попадал в реальное состояние)
+$script:tmrKill = New-Object System.Windows.Forms.Timer
+$script:tmrKill.Interval = 120000
+$script:tmrKill.Add_Tick({ try { Ensure-KillSwitchSync } catch { } })
+$script:tmrKill.Start()
+
 $script:tmrZapret = New-Object System.Windows.Forms.Timer
 $script:tmrZapret.Interval = 3000
 $script:tmrZapret.Add_Tick({ try { Update-ZapretLabel } catch { } })
@@ -1028,6 +1059,7 @@ $form.Add_Shown({
     if ($StartTab -eq 'claude') { $tabs.SelectedIndex = 1 }
     if ($StartTab -eq 'settings') { $tabs.SelectedIndex = 2 }
     Update-KillState
+    Ensure-KillSwitchSync
     if (-not (Test-Path (Join-Path (Split-Path $appDir -Parent) 'bin\xray.exe'))) { & (Join-Path $appDir 'bootstrap.ps1') }
     $script:loadingUi = $true
     $script:loadingSites = $true
