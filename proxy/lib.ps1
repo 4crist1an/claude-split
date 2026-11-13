@@ -286,6 +286,10 @@ function Get-ClaudeExePaths {
         $cand = Join-Path $d.FullName 'app\claude.exe'
         if (Test-Path $cand) { $paths += $cand }
     }
+    # реально запущенные процессы Claude (на случай отката версии — папка другая)
+    foreach ($proc in (Get-Process claude -ErrorAction SilentlyContinue)) {
+        try { if ($proc.Path) { $paths += $proc.Path } } catch { }
+    }
     foreach ($p in @("$env:LOCALAPPDATA\AnthropicClaude", "$env:LOCALAPPDATA\Programs\Claude")) {
         if (Test-Path $p) {
             Get-ChildItem -LiteralPath $p -Filter '*.exe' -File -Recurse -Depth 3 -ErrorAction SilentlyContinue |
