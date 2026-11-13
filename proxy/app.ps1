@@ -722,19 +722,28 @@ $script:saveTimer.Add_Tick({ $script:saveTimer.Stop(); Save-SitesFromBox })
 # ---------- настройки ----------
 function Get-StartupPath { Join-Path ([Environment]::GetFolderPath('Startup')) 'ClaudeVPN.vbs' }
 
-function Set-Autostart([bool]$on) {
-    $p = Get-StartupPath
-    if ($on) {
-        $target = Join-Path $appDir 'start-all.ps1'
-        $line = 'sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""' + $target + '"" -Minimized", 0, False'
-        $content = 'Set sh = CreateObject("WScript.Shell")' + "`r`n" + $line
-        [System.IO.File]::WriteAllText($p, $content, (New-Object System.Text.ASCIIEncoding))
-    }
-    else {
-        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
-    }
+function Test-AutostartTask {
+    & schtasks.exe /query /tn 'ClaudeSplit Autostart' *> $null
+    return ($LASTEXITCODE -eq 0)
 }
 
+# Автозапуск через планировщик с правами администратора:
+# при входе в Windows приложение стартует сразу elevated, поэтому zapret
+# поднимается сам, без запроса UAC.
+function Set-Autostart([bool]$on) {
+    $setup = Join-Path $appDir 'autostart-task.ps1'
+    if (-not (Test-Path $setup)) { return }
+    try {
+        if ($on) {
+            Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $setup) -Wait -ErrorAction Stop
+            Remove-Item -LiteralPath (Get-StartupPath) -Force -ErrorAction SilentlyContinue
+        }
+        else {
+            Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $setup, '-Remove') -Wait -ErrorAction Stop
+        }
+    }
+    catch { }
+}
 $btnSaveSettings.Add_Click({
     $cfg = Get-Config
     $cfg | Add-Member -NotePropertyName autoZapret -NotePropertyValue ([bool]$chkZapretAuto.Checked) -Force
@@ -1032,7 +1041,7 @@ $form.Add_Shown({
 
     Update-PresetList
     if ($script:startHidden) { $form.Hide() }
-    $chkAutostart.Checked = (Test-Path (Get-StartupPath))
+    $chkAutostart.Checked = ((Test-AutostartTask) -or (Test-Path (Get-StartupPath)))
     $chkZapretAuto.Checked = if ($null -ne $conf.autoZapret) { [bool]$conf.autoZapret } else { $false }
     $chkUpdateOnStart.Checked = if ($null -ne $conf.checkUpdates) { [bool]$conf.checkUpdates } else { $false }
     $txtSettingsInfo.Text = ("Папка приложения: " + $appDir + "`r`n" + "zapret: " + (Get-ZapretVersion) + "`r`n" + "Пресетов: " + (Get-ZapretPresets).Count)
