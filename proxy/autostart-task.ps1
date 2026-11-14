@@ -1,18 +1,29 @@
 param([switch]$Remove)
 
 $ErrorActionPreference = 'Stop'
-$TaskName = 'ClaudeSplit Autostart'
 $appDir = $PSScriptRoot
 $startAll = Join-Path $appDir 'start-all.ps1'
+$daemon = Join-Path $appDir 'zapret-daemon.ps1'
+
+$AppTask = 'ClaudeSplit Autostart'
+$DaemonTask = 'ClaudeSplit Zapret Daemon'
+
+$appAction = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $startAll + '" -Minimized'
+$daemonAction = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $daemon + '"'
 
 if ($Remove) {
-    & schtasks.exe /delete /tn $TaskName /f 2>&1 | Out-Null
-    Write-Host "Autostart task removed."
+    & schtasks.exe /delete /tn $AppTask /f 2>&1 | Out-Null
+    & schtasks.exe /delete /tn $DaemonTask /f 2>&1 | Out-Null
+    Write-Host "Autostart tasks removed."
     exit 0
 }
 
-$action = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $startAll + '" -Minimized'
-$out = & schtasks.exe /create /tn $TaskName /tr $action /sc onlogon /rl HIGHEST /f 2>&1
-$out | Out-String | Write-Host
+$out1 = & schtasks.exe /create /tn $AppTask /tr $appAction /sc onlogon /rl HIGHEST /f 2>&1
+$out1 | Out-String | Write-Host
+
+# демон zapret должен работать с правами админа: иначе WinDivert -> Access is denied
+$out2 = & schtasks.exe /create /tn $DaemonTask /tr $daemonAction /sc onlogon /rl HIGHEST /f 2>&1
+$out2 | Out-String | Write-Host
+
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Write-Host "Autostart task created (runs as administrator at logon)." -ForegroundColor Green
+Write-Host "Tasks created: app + zapret daemon (both elevated at logon)." -ForegroundColor Green

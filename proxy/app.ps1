@@ -727,28 +727,22 @@ $script:saveTimer.Add_Tick({ $script:saveTimer.Stop(); Save-SitesFromBox })
 
 # ---------- настройки ----------
 function Get-StartupPath { Join-Path ([Environment]::GetFolderPath('Startup')) 'ClaudeVPN.vbs' }
+function Get-StartupPath { Join-Path ([Environment]::GetFolderPath('Startup')) 'ClaudeVPN.vbs' }
 
-function Test-AutostartTask {
-    & schtasks.exe /query /tn 'ClaudeSplit Autostart' *> $null
-    return ($LASTEXITCODE -eq 0)
-}
-
-# Автозапуск через планировщик с правами администратора:
-# при входе в Windows приложение стартует сразу elevated, поэтому zapret
-# поднимается сам, без запроса UAC.
+# Автозапуск через папку Startup: приложение стартует БЕЗ прав админа,
+# чтобы могло показать UAC-запрос для zapret (UAC-токен — единственный,
+# с которым WinDivert реально открывает фильтр).
 function Set-Autostart([bool]$on) {
-    $setup = Join-Path $appDir 'autostart-task.ps1'
-    if (-not (Test-Path $setup)) { return }
-    try {
-        if ($on) {
-            Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $setup) -Wait -ErrorAction Stop
-            Remove-Item -LiteralPath (Get-StartupPath) -Force -ErrorAction SilentlyContinue
-        }
-        else {
-            Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $setup, '-Remove') -Wait -ErrorAction Stop
-        }
+    $p = Get-StartupPath
+    if ($on) {
+        $target = Join-Path $appDir 'start-all.ps1'
+        $line = 'sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""' + $target + '"" -Minimized", 0, False'
+        $content = 'Set sh = CreateObject("WScript.Shell")' + "`r`n" + $line
+        [System.IO.File]::WriteAllText($p, $content, (New-Object System.Text.ASCIIEncoding))
     }
-    catch { }
+    else {
+        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+    }
 }
 $btnSaveSettings.Add_Click({
     $cfg = Get-Config
@@ -1073,13 +1067,14 @@ $form.Add_Shown({
 
     Update-PresetList
     if ($script:startHidden) { $form.Hide() }
-    $chkAutostart.Checked = ((Test-AutostartTask) -or (Test-Path (Get-StartupPath)))
+    $chkAutostart.Checked = (Test-Path (Get-StartupPath))
     $chkZapretAuto.Checked = if ($null -ne $conf.autoZapret) { [bool]$conf.autoZapret } else { $false }
     $chkUpdateOnStart.Checked = if ($null -ne $conf.checkUpdates) { [bool]$conf.checkUpdates } else { $false }
     $txtSettingsInfo.Text = ("Папка приложения: " + $appDir + "`r`n" + "zapret: " + (Get-ZapretVersion) + "`r`n" + "Пресетов: " + (Get-ZapretPresets).Count)
 
     Write-Log 'app started'
-    if ($chkZapretAuto.Checked -and -not (Get-ZapretStatus).running -and (Test-ZapretDaemon)) {
+    if ($chkZapretAuto.Checked -and -not (Get-ZapretStatus).running) {
+        Start-ZapretAction 'start'
         $pz = if ($conf.zapretPreset) { $conf.zapretPreset } else { 'general (ALT).bat' }
         $ok = Start-ZapretPreset $pz
         Write-Log ('user: zapret start -> ok=' + $ok)

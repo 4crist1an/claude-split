@@ -1,3 +1,1 @@
-$ErrorActionPreference = 'SilentlyContinue'
-Get-Process winws | Stop-Process -Force
-Start-Sleep -Milliseconds 500
+Get-Process winws | ForEach-Object { & taskkill.exe /PID $_.Id /T /F *> $null }

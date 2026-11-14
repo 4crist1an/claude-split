@@ -11,11 +11,11 @@ function Log([string]$m) {
     ('{0}  {1}' -f (Get-Date -Format 'HH:mm:ss'), $m) | Out-File -LiteralPath $log -Append -Encoding UTF8
 }
 
-$PID | Out-File -LiteralPath $pidFile -Encoding ASCII
-Log ('zapret daemon started pid=' + $PID)
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+("$PID|" + (Get-Process -Id $PID).StartTime.Ticks + "|" + [int]$isAdmin) | Out-File -LiteralPath $pidFile -Encoding ASCII
+Log ('zapret daemon started pid=' + $PID + ' admin=' + $isAdmin)
 
 $lastSeq = -1
-$lastAction = ''
 
 while ($true) {
     try {
@@ -24,19 +24,31 @@ while ($true) {
             try { $job = Get-Content -LiteralPath $jobFile -Raw | ConvertFrom-Json } catch { }
             if ($job -and $job.seq -ne $lastSeq) {
                 $lastSeq = $job.seq
+
                 if ($job.action -eq 'stop') {
-                    Get-Process winws -ErrorAction SilentlyContinue | Stop-Process -Force
+                    Get-Process winws -ErrorAction SilentlyContinue | ForEach-Object { & taskkill.exe /PID $_.Id /T /F *> $null }
+                    Remove-Item (Join-Path $root 'proxy\zapret-winws.pid') -Force -ErrorAction SilentlyContinue
                     Log 'zapret stopped (daemon)'
                 }
                 elseif ($job.action -eq 'start') {
-                    Get-Process winws -ErrorAction SilentlyContinue | Stop-Process -Force
-                    Start-Sleep -Milliseconds 700
+                    # гасим прошлый winws и ждём, пока драйвер освободит фильтр
+                    $old = @(Get-Process winws -ErrorAction SilentlyContinue)
+                    if ($old.Count -gt 0) {
+                        foreach ($w in $old) { & taskkill.exe /PID $w.Id /T /F *> $null }
+                        for ($k = 0; $k -lt 24; $k++) {
+                            Start-Sleep -Milliseconds 250
+                            if (-not (Get-Process winws -ErrorAction SilentlyContinue)) { break }
+                        }
+                        Start-Sleep -Milliseconds 1500
+                    }
+
                     $bat = Join-Path $zdir $job.bat
                     if (Test-Path $bat) {
                         $text = Get-Content -LiteralPath $bat -Raw
                         $modified = $text -replace 'start\s+"[^"]*"\s*/min\s+', ''
                         $tmpBat = Join-Path $zdir '_run_current.bat'
                         [System.IO.File]::WriteAllText($tmpBat, $modified, [System.Text.Encoding]::Default)
+
                         $runLog = $outLog
                         for ($k = 0; $k -lt 6; $k++) {
                             try {
@@ -49,10 +61,9 @@ while ($true) {
                             $runLog = Join-Path $root 'proxy\zapret-run-alt.log'
                             Remove-Item $runLog -Force -ErrorAction SilentlyContinue
                         }
-                        $full = '/c "' + $tmpBat + ' > "' + $runLog + '" 2>&1"'
+
                         $full = '/c "' + $tmpBat + ' > "' + $runLog + '" 2>&1"'
                         Start-Process -FilePath 'cmd.exe' -ArgumentList $full -WorkingDirectory $zdir -WindowStyle Hidden
-                        Log ('zapret start requested: ' + $job.bat)
                         Log ('zapret start requested: ' + $job.bat)
                     }
                     else {

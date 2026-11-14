@@ -27,11 +27,6 @@ if ($node) {
     }
 }
 
-# zapret поднимаем только если демон уже запущен (иначе это UAC и он заблокирует старт окна)
-if ($null -eq $cfg.autoZapret -or [bool]$cfg.autoZapret) {
-    $preset = if ($cfg.zapretPreset) { $cfg.zapretPreset } else { 'general (ALT).bat' }
-    if ((Test-ZapretDaemon) -and -not (Get-ZapretStatus).running) { [void](Start-ZapretPreset $preset) }
-}
 
 $already = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Claude VPN' }
 if (-not $already) {

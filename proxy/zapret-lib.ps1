@@ -1,3 +1,12 @@
+function Enter-ZapretLock([int]$timeoutMs = 90000) {
+    if (-not $script:ZLock) { $script:ZLock = New-Object System.Threading.Mutex($false, 'Global\ClaudeSplitZapretLock') }
+    try { return $script:ZLock.WaitOne($timeoutMs) } catch { return $false }
+}
+
+function Exit-ZapretLock() {
+    if ($script:ZLock) { try { $script:ZLock.ReleaseMutex() } catch { } }
+}
+
 $ErrorActionPreference = 'Stop'
 
 $script:ZAppDir = $PSScriptRoot
@@ -33,14 +42,29 @@ function Get-ZapretPresets {
 function Test-ZapretDaemon {
     if (-not (Test-Path $script:ZDaemonPid)) { return $false }
     try {
-        $p = [int](Get-Content $script:ZDaemonPid -Raw).Trim()
-        if (Get-Process -Id $p -ErrorAction SilentlyContinue) { return $true }
+        $parts = ((Get-Content $script:ZDaemonPid -Raw).Trim()) -split '\|'
+        $p = [int]$parts[0]
+        $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
+        if (-not $proc) { return $false }
+        if ($parts.Count -ge 2) {
+            $want = [long]$parts[1]
+            if ([Math]::Abs($proc.StartTime.Ticks - $want) -gt 20000000) { return $false }
+        }
+        if ($parts.Count -ge 3 -and $parts[2] -eq '0') {
+            # демон без прав администратора — WinDivert не откроется
+            try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch { }
+            Remove-Item $script:ZDaemonPid -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+        return $true
     } catch { }
     return $false
 }
 
 function Ensure-ZapretDaemon {
     if (Test-ZapretDaemon) { return $true }
+    Remove-Item $script:ZDaemonPid -Force -ErrorAction SilentlyContinue
+
     ZLog 'запускаю zapret-демон (нужно подтвердить UAC)'
     try {
         Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',(Join-Path $script:ZAppDir 'zapret-daemon.ps1')) -ErrorAction Stop
@@ -70,55 +94,56 @@ function Send-ZapretJob([string]$action, [string]$bat) {
 }
 
 function Stop-Zapret {
-    if (-not (Test-ZapretDaemon)) {
-        $p = Get-Process winws -ErrorAction SilentlyContinue
-        if ($p) {
-            try { $p | Stop-Process -Force -ErrorAction Stop } catch { }
-        }
-        return
+    $got = Enter-ZapretLock 30000
+    try {
+        Stop-ZapretLocked
     }
-    Send-ZapretJob 'stop' ''
-    for ($i = 0; $i -lt 12; $i++) {
-        Start-Sleep -Milliseconds 400
-        if (-not (Get-Process winws -ErrorAction SilentlyContinue)) { return }
-    }
-    ZLog 'stop: winws остался жив, принудительное завершение'
+    finally { if ($got) { Exit-ZapretLock } }
+}
+
+function Stop-ZapretLocked {
     $kill = Join-Path $script:ZAppDir 'zapret-kill.ps1'
     if (Test-Path $kill) {
         try {
             Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $kill) -Wait -ErrorAction Stop
         }
-        catch { ZLog ('stop: принудительное завершение отменено — ' + $_.Exception.Message) }
+        catch { ZLog ('stop: UAC отменён — ' + $_.Exception.Message) }
     }
+    Remove-Item (Join-Path $script:ZAppDir 'zapret-last.txt') -Force -ErrorAction SilentlyContinue
+    ZLog 'zapret остановлен'
 }
 function Start-ZapretPreset([string]$batName) {
-    if (-not (Ensure-ZapretDaemon)) { ZLog ('zapret: демон недоступен, пресет ' + $batName + ' не запущен'); return $false }
+    $got = Enter-ZapretLock 90000
+    try {
+        return Start-ZapretPresetLocked $batName
+    }
+    finally { if ($got) { Exit-ZapretLock } }
+}
 
-    $script:ZUsedFallback = ''
-    Send-ZapretJob 'start' $batName
+function Start-ZapretPresetLocked([string]$batName) {
+    $lastFile = Join-Path $script:ZAppDir 'zapret-last.txt'
+    if ((Get-ZapretStatus).running -and (Test-Path $lastFile)) {
+        $last = (Get-Content $lastFile -Raw).Trim()
+        if ($last -eq $batName) { ZLog ('zapret уже запущен: ' + $batName); return $true }
+    }
 
-    for ($i = 0; $i -lt 25; $i++) {
-        Start-Sleep -Milliseconds 600
+    $uac = Join-Path $script:ZAppDir 'zapret-uac.ps1'
+    if (-not (Test-Path $uac)) { ZLog 'нет zapret-uac.ps1'; return $false }
+    ZLog ('запускаю zapret через UAC: ' + $batName)
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $uac, '-Preset', ('"' + $batName + '"')) -ErrorAction Stop
+    }
+    catch { ZLog ('UAC отменён: ' + $_.Exception.Message); return $false }
+
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 700
         if (Get-Process winws -ErrorAction SilentlyContinue) {
+            Set-Content -LiteralPath $lastFile -Value $batName -Encoding UTF8
             ZLog ('zapret started: ' + $batName)
             return $true
         }
     }
     ZLog ('zapret FAILED: ' + $batName)
-
-    # если пресет не поднялся — пробуем обычный general.bat и запоминаем его
-    if ($batName -ne 'general (ALT).bat' -and (Test-Path (Join-Path $script:ZDir 'general (ALT).bat'))) {
-        ZLog 'пробую запасной пресет general (ALT).bat'
-        Send-ZapretJob 'start' 'general (ALT).bat'
-        for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Milliseconds 700
-            if (Get-Process winws -ErrorAction SilentlyContinue) {
-                $script:ZUsedFallback = 'general (ALT).bat'
-                ZLog 'zapret started: general (ALT).bat (запасной)'
-                return $true
-            }
-        }
-    }
     return $false
 }
 
