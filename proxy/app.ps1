@@ -157,12 +157,13 @@ $pageVpn.Controls.Add($cmbAddType)
 $txtSub = New-Text $pageVpn 126 94 300
 $lblSubHint = New-Label $pageVpn 'выбери тип, вставь ссылку и нажми «Добавить»' 12 120 540 8 ([System.Drawing.Color]::FromArgb(140, 150, 170))
 
-[void](New-Label $pageVpn 'Сервер   (• — вручную, удаляются кнопкой «Удалить»)' 12 146 260 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
+[void](New-Label $pageVpn 'Сервер   (• — вручную, удаляются кнопкой «Удалить»)' 12 146 430 9 ([System.Drawing.Color]::FromArgb(160, 170, 190)))
 
 $cmbNode = New-Object System.Windows.Forms.ComboBox
 $cmbNode.Location = New-Object System.Drawing.Point(12, 166)
 $cmbNode.Size = New-Object System.Drawing.Size(230, 24)
 $cmbNode.DropDownStyle = 'DropDownList'
+$cmbNode.DropDownWidth = 540
 $pageVpn.Controls.Add($cmbNode)
 
 $script:skipNodeSel = $false
@@ -179,6 +180,8 @@ $cmbNode.Add_SelectedIndexChanged({
         return
     }
     $script:lastNodeIdx = $i
+    $selN = $script:nodeMap[$i]
+    if ($selN) { $lblInfo.Text = 'Сервер: ' + $selN.name + '  (' + $selN.host + ':' + $selN.port + ')' }
 })
 
 $nodeMenu = New-Object System.Windows.Forms.ContextMenuStrip
@@ -323,7 +326,8 @@ function Refresh-Nodes([switch]$Reload) {
         [void]$script:nodeMap.Add($null)
         foreach ($n in $grp[1]) {
             $mark = if ($n.sub -eq 'вручную') { '• ' } else { '   ' }
-            [void]$cmbNode.Items.Add("$mark$($n.name)  [$($n.host)]")
+            $msTxt = if ($n.PSObject.Properties['pingMs'] -and $n.pingMs -ge 0) { " — $($n.pingMs) мс" } else { '' }
+            [void]$cmbNode.Items.Add("$mark$($n.name)$msTxt")
             [void]$script:nodeMap.Add($n)
         }
     }
@@ -620,7 +624,7 @@ $btnTestAll.Add_Click({
         if (-not $n) { continue }
         $ms = if ($n.pingMs -ge 0) { "$($n.pingMs) мс" } else { 'н/д' }
         $mark = if ($n.sub -eq 'вручную') { '• ' } else { '   ' }
-        $cmbNode.Items[$k] = "$mark$($n.name)  [$($n.host)]  $ms"
+        $cmbNode.Items[$k] = "$mark$($n.name) — $ms"
     }
     $script:skipNodeSel = $false
     if ($script:lastNodeIdx -ge 0) { $cmbNode.SelectedIndex = $script:lastNodeIdx }
